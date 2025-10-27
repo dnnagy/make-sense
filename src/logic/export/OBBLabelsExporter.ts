@@ -22,6 +22,17 @@ export class OBBLabelsExporter {
 
     private static exportAsYOLO(): void {
         const zip = new JSZip();
+        
+        // Add labels.txt file with label names
+        const labelNames: LabelName[] = LabelsSelector.getLabelNames();
+        const labelsContent: string = labelNames.map((label: LabelName) => label.name).join('\n');
+        try {
+            zip.file('labels.txt', labelsContent);
+        } catch (error) {
+            throw new Error(error as string);
+        }
+        
+        // Add annotation files for each image
         LabelsSelector.getImagesData()
             .forEach((imageData: ImageData) => {
                 const fileContent: string = OBBLabelsExporter.wrapOBBLabelsIntoYOLO(imageData);
