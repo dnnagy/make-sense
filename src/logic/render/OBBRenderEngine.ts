@@ -351,6 +351,11 @@ export class OBBRenderEngine extends BaseRenderEngine {
         EditorActions.setViewPortActionsDisabledStatus(false);
     }
 
+    public cancelLabelCreation() {
+        this.activePath = [];
+        EditorActions.setViewPortActionsDisabledStatus(false);
+    }
+
     private addOBBLabel = (vertices: IPoint[]) => {
         const activeLabelId = LabelsSelector.getActiveLabelNameId();
         const imageData: ImageData = LabelsSelector.getActiveImageData();
