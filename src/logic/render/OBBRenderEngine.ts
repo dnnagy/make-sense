@@ -34,6 +34,7 @@ export class OBBRenderEngine extends BaseRenderEngine {
 
     private activePath: IPoint[] = [];
     private resizeAnchorIndex: number = null;
+    private resizeEdgeIndex: number = null;
 
     public constructor(canvas: HTMLCanvasElement) {
         super(canvas);
@@ -70,6 +71,7 @@ export class OBBRenderEngine extends BaseRenderEngine {
             } else {
                 const obbUnderMouse: LabelOBB = this.getOBBUnderMouse(data);
                 if (!!obbUnderMouse) {
+                    // Check corner anchors first
                     const anchorIndex: number = obbUnderMouse.vertices.reduce(
                         (indexUnderMouse: number, anchor: IPoint, index: number) => {
                         if (indexUnderMouse === null) {
@@ -84,7 +86,13 @@ export class OBBRenderEngine extends BaseRenderEngine {
                     if (anchorIndex !== null) {
                         this.startExistingLabelResize(data, obbUnderMouse.id, anchorIndex);
                     } else {
-                        store.dispatch(updateActiveLabelId(obbUnderMouse.id));
+                        // Check edge anchors
+                        const edgeIndex = this.getEdgeUnderMouse(obbUnderMouse.vertices, data);
+                        if (edgeIndex !== null) {
+                            this.startExistingLabelEdgeResize(data, obbUnderMouse.id, edgeIndex);
+                        } else {
+                            store.dispatch(updateActiveLabelId(obbUnderMouse.id));
+                        }
                     }
                 } else {
                     this.updateActivelyCreatedLabel(data);
@@ -96,6 +104,8 @@ export class OBBRenderEngine extends BaseRenderEngine {
     public mouseUpHandler(data: EditorData): void {
         if (this.isResizeInProgress())
             this.endExistingLabelResize(data);
+        if (this.isEdgeResizeInProgress())
+            this.endExistingLabelEdgeResize(data);
     }
 
     public mouseMoveHandler(data: EditorData): void {
@@ -103,7 +113,7 @@ export class OBBRenderEngine extends BaseRenderEngine {
             const isOverImage: boolean = RenderEngineUtil.isMouseOverImage(data);
             if (isOverImage && !this.isCreationInProgress()) {
                 const labelOBB: LabelOBB = this.getOBBUnderMouse(data);
-                if (!!labelOBB && !this.isResizeInProgress()) {
+                if (!!labelOBB && !this.isResizeInProgress() && !this.isEdgeResizeInProgress()) {
                     if (LabelsSelector.getHighlightedLabelId() !== labelOBB.id) {
                         store.dispatch(updateHighlightedLabelId(labelOBB.id))
                     }
@@ -204,6 +214,12 @@ export class OBBRenderEngine extends BaseRenderEngine {
                 data.viewPortContentImageRect
             );
             pathOnCanvas = this.calculateRectangleCorners(pathOnCanvas, this.resizeAnchorIndex, snappedMousePosition);
+        } else if (this.isEdgeResizeInProgress()) {
+            const snappedMousePosition: IPoint = RectUtil.snapPointToRect(
+                data.mousePositionOnViewPortContent,
+                data.viewPortContentImageRect
+            );
+            pathOnCanvas = this.calculateRectangleFromEdgeDrag(pathOnCanvas, this.resizeEdgeIndex, snappedMousePosition);
         }
         
         const lineColor: string = BaseRenderEngine.resolveLabelLineColor(labelOBB.labelId, true);
@@ -216,9 +232,20 @@ export class OBBRenderEngine extends BaseRenderEngine {
         DrawUtil.drawPolygon(this.canvas, pathOnCanvas, lineColor, RenderEngineSettings.LINE_THICKNESS);
         
         if (isActive) {
+            // Draw corner anchors
             pathOnCanvas.forEach((point: IPoint) => {
                 DrawUtil.drawCircleWithFill(this.canvas, point, RenderEngineSettings.anchorSize.width / 2, anchorColor);
             });
+            
+            // Draw edge anchors (midpoints)
+            for (let i = 0; i < pathOnCanvas.length; i++) {
+                const nextIndex = (i + 1) % pathOnCanvas.length;
+                const edgeMidpoint = {
+                    x: (pathOnCanvas[i].x + pathOnCanvas[nextIndex].x) / 2,
+                    y: (pathOnCanvas[i].y + pathOnCanvas[nextIndex].y) / 2
+                };
+                DrawUtil.drawRectWithFill(this.canvas, RectUtil.getRectWithCenterAndSize(edgeMidpoint, RenderEngineSettings.anchorSize), anchorColor);
+            }
         }
     }
 
@@ -244,7 +271,7 @@ export class OBBRenderEngine extends BaseRenderEngine {
     // =================================================================================================================
 
     public isInProgress(): boolean {
-        return this.isCreationInProgress() || this.isResizeInProgress();
+        return this.isCreationInProgress() || this.isResizeInProgress() || this.isEdgeResizeInProgress();
     }
 
     private isCreationInProgress(): boolean {
@@ -253,6 +280,10 @@ export class OBBRenderEngine extends BaseRenderEngine {
 
     private isResizeInProgress(): boolean {
         return this.resizeAnchorIndex !== null;
+    }
+
+    private isEdgeResizeInProgress(): boolean {
+        return this.resizeEdgeIndex !== null;
     }
 
     private updateActivelyCreatedLabel = (data: EditorData) => {
@@ -558,4 +589,121 @@ export class OBBRenderEngine extends BaseRenderEngine {
         this.resizeAnchorIndex = null;
         EditorActions.setViewPortActionsDisabledStatus(false);
     };
+
+    private getEdgeUnderMouse(vertices: IPoint[], data: EditorData): number | null {
+        const pathOnCanvas: IPoint[] = RenderEngineUtil.transferPolygonFromImageToViewPortContent(vertices, data);
+        
+        for (let i = 0; i < pathOnCanvas.length; i++) {
+            const nextIndex = (i + 1) % pathOnCanvas.length;
+            const edgeMidpoint = {
+                x: (pathOnCanvas[i].x + pathOnCanvas[nextIndex].x) / 2,
+                y: (pathOnCanvas[i].y + pathOnCanvas[nextIndex].y) / 2
+            };
+            
+            if (this.isMouseOverAnchor(data.mousePositionOnViewPortContent, edgeMidpoint)) {
+                return i;
+            }
+        }
+        
+        return null;
+    }
+
+    private startExistingLabelEdgeResize = (data: EditorData, labelId: string, edgeIndex: number) => {
+        store.dispatch(updateActiveLabelId(labelId));
+        this.resizeEdgeIndex = edgeIndex;
+        EditorActions.setViewPortActionsDisabledStatus(true);
+    };
+
+    private endExistingLabelEdgeResize = (data: EditorData) => {
+        const activeLabelOBB: LabelOBB = LabelsSelector.getActiveImageData().labelOBBs.find(
+            (label: LabelOBB) => label.id === LabelsSelector.getActiveLabelId()
+        );
+        
+        if (!!activeLabelOBB) {
+            const snappedMousePosition: IPoint = RectUtil.snapPointToRect(
+                data.mousePositionOnViewPortContent,
+                data.viewPortContentImageRect
+            );
+            const imageData: ImageData = LabelsSelector.getActiveImageData();
+            
+            imageData.labelOBBs = imageData.labelOBBs.map((labelOBB: LabelOBB) => {
+                if (labelOBB.id === activeLabelOBB.id) {
+                    // Calculate new rectangle from edge drag in viewport coordinates
+                    const verticesOnCanvas = RenderEngineUtil.transferPolygonFromImageToViewPortContent(labelOBB.vertices, data);
+                    const newVerticesOnCanvas = this.calculateRectangleFromEdgeDrag(verticesOnCanvas, this.resizeEdgeIndex, snappedMousePosition);
+                    
+                    // Transfer back to image coordinates
+                    const newVertices = newVerticesOnCanvas.map((point: IPoint) => 
+                        RenderEngineUtil.transferPointFromViewPortContentToImage(point, data)
+                    );
+                    
+                    return {
+                        ...labelOBB,
+                        vertices: newVertices
+                    };
+                }
+                return labelOBB;
+            });
+            
+            store.dispatch(updateImageDataById(imageData.id, imageData));
+        }
+        
+        this.resizeEdgeIndex = null;
+        EditorActions.setViewPortActionsDisabledStatus(false);
+    };
+
+    private calculateRectangleFromEdgeDrag(originalVertices: IPoint[], edgeIndex: number, mousePosition: IPoint): IPoint[] {
+        // Edge is defined by edgeIndex and the next vertex
+        const v1Index = edgeIndex;
+        const v2Index = (edgeIndex + 1) % 4;
+        const v3Index = (edgeIndex + 2) % 4;
+        const v4Index = (edgeIndex + 3) % 4;
+        
+        // The dragged edge is v1->v2, opposite edge is v3->v4
+        const v1 = originalVertices[v1Index];
+        const v2 = originalVertices[v2Index];
+        const v3 = originalVertices[v3Index];
+        const v4 = originalVertices[v4Index];
+        
+        // Edge direction (normalized)
+        const edgeVector = PointUtil.subtract(v2, v1);
+        const edgeLength = Math.sqrt(edgeVector.x * edgeVector.x + edgeVector.y * edgeVector.y);
+        
+        if (edgeLength === 0) {
+            return originalVertices;
+        }
+        
+        const edgeDir = { x: edgeVector.x / edgeLength, y: edgeVector.y / edgeLength };
+        
+        // Perpendicular to edge (pointing inward toward rectangle)
+        const perpendicular = { x: -edgeDir.y, y: edgeDir.x };
+        
+        // Determine which perpendicular direction points into the rectangle
+        const toOppositeEdge = PointUtil.subtract(v3, v1);
+        const perpDot = toOppositeEdge.x * perpendicular.x + toOppositeEdge.y * perpendicular.y;
+        
+        if (perpDot < 0) {
+            perpendicular.x = -perpendicular.x;
+            perpendicular.y = -perpendicular.y;
+        }
+        
+        // Project mouse position onto the perpendicular direction from the edge
+        const toMouse = PointUtil.subtract(mousePosition, v1);
+        const perpDistance = toMouse.x * perpendicular.x + toMouse.y * perpendicular.y;
+        
+        // Translate the dragged edge
+        const offset = { x: perpendicular.x * perpDistance, y: perpendicular.y * perpDistance };
+        
+        const newV1 = { x: v1.x + offset.x, y: v1.y + offset.y };
+        const newV2 = { x: v2.x + offset.x, y: v2.y + offset.y };
+        
+        // Opposite edge stays in place
+        const newVertices = new Array(4);
+        newVertices[v1Index] = newV1;
+        newVertices[v2Index] = newV2;
+        newVertices[v3Index] = v3;
+        newVertices[v4Index] = v4;
+        
+        return newVertices;
+    }
 }
