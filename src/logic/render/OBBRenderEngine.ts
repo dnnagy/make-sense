@@ -383,46 +383,133 @@ export class OBBRenderEngine extends BaseRenderEngine {
         const anchorIndex = (draggedIndex + 2) % 4;
         const anchor = originalVertices[anchorIndex];
         
-        // Get the two adjacent corners
+        // Get the two adjacent corners (these share an edge with the anchor)
         const adj1Index = (anchorIndex + 1) % 4;
         const adj2Index = (anchorIndex + 3) % 4;
         
-        // Calculate edge vectors from anchor in the original rectangle
-        const edge1 = PointUtil.subtract(originalVertices[adj1Index], anchor);
-        const edge2 = PointUtil.subtract(originalVertices[adj2Index], anchor);
+        // Calculate original edge vectors from anchor
+        const origEdge1 = PointUtil.subtract(originalVertices[adj1Index], anchor);
+        const origEdge2 = PointUtil.subtract(originalVertices[adj2Index], anchor);
+        const origDiagonal = PointUtil.subtract(originalVertices[draggedIndex], anchor);
         
-        // Vector from anchor to new dragged position
-        const toNew = PointUtil.subtract(newPosition, anchor);
+        const origEdge1Length = Math.sqrt(origEdge1.x * origEdge1.x + origEdge1.y * origEdge1.y);
+        const origEdge2Length = Math.sqrt(origEdge2.x * origEdge2.x + origEdge2.y * origEdge2.y);
+        const origDiagLength = Math.sqrt(origDiagonal.x * origDiagonal.x + origDiagonal.y * origDiagonal.y);
         
-        // Normalize edge directions
-        const edge1Length = Math.sqrt(edge1.x * edge1.x + edge1.y * edge1.y);
-        const edge2Length = Math.sqrt(edge2.x * edge2.x + edge2.y * edge2.y);
-        
-        if (edge1Length === 0 || edge2Length === 0) {
+        if (origEdge1Length === 0 || origEdge2Length === 0 || origDiagLength === 0) {
             return originalVertices;
         }
         
-        const edge1Norm = { x: edge1.x / edge1Length, y: edge1.y / edge1Length };
-        const edge2Norm = { x: edge2.x / edge2Length, y: edge2.y / edge2Length };
+        // Calculate which edge is more aligned with the diagonal (using dot product)
+        const origEdge1Norm = { x: origEdge1.x / origEdge1Length, y: origEdge1.y / origEdge1Length };
+        const origEdge2Norm = { x: origEdge2.x / origEdge2Length, y: origEdge2.y / origEdge2Length };
+        const origDiagNorm = { x: origDiagonal.x / origDiagLength, y: origDiagonal.y / origDiagLength };
         
-        // Project toNew onto both edge directions
-        const proj1 = toNew.x * edge1Norm.x + toNew.y * edge1Norm.y;
-        const proj2 = toNew.x * edge2Norm.x + toNew.y * edge2Norm.y;
+        const dot1 = origEdge1Norm.x * origDiagNorm.x + origEdge1Norm.y * origDiagNorm.y;
+        const dot2 = origEdge2Norm.x * origDiagNorm.x + origEdge2Norm.y * origDiagNorm.y;
         
-        // Calculate new positions for all corners
+        // Determine which edge is primary (more aligned with diagonal)
+        let primaryEdge: IPoint, secondaryEdge: IPoint;
+        let primaryIndex: number, secondaryIndex: number;
+        let primaryLength: number, secondaryLength: number;
+        
+        if (Math.abs(dot1) >= Math.abs(dot2)) {
+            primaryEdge = origEdge1;
+            secondaryEdge = origEdge2;
+            primaryIndex = adj1Index;
+            secondaryIndex = adj2Index;
+            primaryLength = origEdge1Length;
+            secondaryLength = origEdge2Length;
+        } else {
+            primaryEdge = origEdge2;
+            secondaryEdge = origEdge1;
+            primaryIndex = adj2Index;
+            secondaryIndex = adj1Index;
+            primaryLength = origEdge2Length;
+            secondaryLength = origEdge1Length;
+        }
+        
+        // Calculate the angle between the primary edge and the diagonal in the original rectangle
+        // Using: cos(angle) = dot(primary, diagonal) / (|primary| * |diagonal|)
+        const cosAngle = (primaryEdge.x * origDiagonal.x + primaryEdge.y * origDiagonal.y) / (primaryLength * origDiagLength);
+        const sinAngle = Math.sqrt(1 - cosAngle * cosAngle);
+        
+        // tan(angle) = opposite/adjacent = secondaryLength / primaryLength (from right triangle)
+        // This angle must be preserved to maintain the rectangle geometry
+        
+        // New diagonal
+        const newDiagonal = PointUtil.subtract(newPosition, anchor);
+        const newDiagLength = Math.sqrt(newDiagonal.x * newDiagonal.x + newDiagonal.y * newDiagonal.y);
+        
+        if (newDiagLength === 0) {
+            return originalVertices;
+        }
+        
+        // New edge lengths (scaled proportionally based on diagonal change)
+        const scaleFactor = newDiagLength / origDiagLength;
+        const newPrimaryLength = primaryLength * scaleFactor;
+        const newSecondaryLength = secondaryLength * scaleFactor;
+        
+        // Get the angle of the new diagonal
+        const newDiagAngle = Math.atan2(newDiagonal.y, newDiagonal.x);
+        
+        // Get the original angle of the diagonal
+        const origDiagAngle = Math.atan2(origDiagonal.y, origDiagonal.x);
+        
+        // Get the original angle of the primary edge
+        const origPrimaryAngle = Math.atan2(primaryEdge.y, primaryEdge.x);
+        
+        // Calculate the offset angle between primary edge and diagonal
+        let angleOffset = origPrimaryAngle - origDiagAngle;
+        
+        // New primary edge angle
+        const newPrimaryAngle = newDiagAngle + angleOffset;
+        
+        // New primary edge vector
+        const newPrimaryEdge = {
+            x: Math.cos(newPrimaryAngle) * newPrimaryLength,
+            y: Math.sin(newPrimaryAngle) * newPrimaryLength
+        };
+        
+        // Calculate the original angle between primary and secondary edges
+        const origSecondaryAngle = Math.atan2(secondaryEdge.y, secondaryEdge.x);
+        const origAngleBetweenEdges = origSecondaryAngle - origPrimaryAngle;
+        
+        // New secondary edge angle maintains the same angle relationship
+        const newSecondaryAngle = newPrimaryAngle + origAngleBetweenEdges;
+        const newSecondaryEdge = {
+            x: Math.cos(newSecondaryAngle) * newSecondaryLength,
+            y: Math.sin(newSecondaryAngle) * newSecondaryLength
+        };
+        
+        // Assign edges to correct vertices
         const newVertices = new Array(4);
         newVertices[anchorIndex] = anchor;
-        newVertices[adj1Index] = {
-            x: anchor.x + edge1Norm.x * proj1,
-            y: anchor.y + edge1Norm.y * proj1
-        };
-        newVertices[adj2Index] = {
-            x: anchor.x + edge2Norm.x * proj2,
-            y: anchor.y + edge2Norm.y * proj2
-        };
+        
+        if (primaryIndex === adj1Index) {
+            newVertices[adj1Index] = {
+                x: anchor.x + newPrimaryEdge.x,
+                y: anchor.y + newPrimaryEdge.y
+            };
+            newVertices[adj2Index] = {
+                x: anchor.x + newSecondaryEdge.x,
+                y: anchor.y + newSecondaryEdge.y
+            };
+        } else {
+            newVertices[adj2Index] = {
+                x: anchor.x + newPrimaryEdge.x,
+                y: anchor.y + newPrimaryEdge.y
+            };
+            newVertices[adj1Index] = {
+                x: anchor.x + newSecondaryEdge.x,
+                y: anchor.y + newSecondaryEdge.y
+            };
+        }
+        
+        // Dragged corner is at the sum of both edges
         newVertices[draggedIndex] = {
-            x: anchor.x + edge1Norm.x * proj1 + edge2Norm.x * proj2,
-            y: anchor.y + edge1Norm.y * proj1 + edge2Norm.y * proj2
+            x: anchor.x + newPrimaryEdge.x + newSecondaryEdge.x,
+            y: anchor.y + newPrimaryEdge.y + newSecondaryEdge.y
         };
         
         return newVertices;
