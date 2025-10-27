@@ -59,7 +59,7 @@ export class RoboflowAPIObjectDetector {
         FileUtil.loadImageBase64(imageData.fileData).then((data) => {
             axios({
                 method: 'POST',
-                url: '' + roboflowAPIDetails.model,
+                url: 'https://detect.roboflow.com/' + roboflowAPIDetails.model,
                 params: {
                     api_key: roboflowAPIDetails.key
                 },
